@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-2025-vs2026 # Provides a Windows Server environment (Win 10/11 equivalent)
+    runs-on: windows-2022 # Provides a Windows Server environment (Win 10/11 equivalent)
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
