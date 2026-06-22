@@ -5,10 +5,23 @@ on:
 
 jobs:
   build:
-    runs-on: windows-2025-vs2026 # Provides a Windows Server environment (Win 10/11 equivalent)
+    runs-on: windows-2022 # Provides a Windows Server environment (Win 10/11 equivalent)
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Maximize Disk Space
+        shell: powershell
+        run: |
+          Write-Host "Reclaiming disk space..."
+          # Remove Android SDK (~12GB)
+          Remove-Item -Recurse -Force $env:ANDROID_HOME -ErrorAction SilentlyContinue
+          # Remove .NET Runtimes/SDKs (~2GB)
+          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
+          # Remove Strawberry Perl (~1GB)
+          Remove-Item -Recurse -Force "C:\Strawberry" -ErrorAction SilentlyContinue
+          Write-Host "Cleanup complete. Current free space:"
+          Get-PSDrive C | Select-Object @{Name="Free(GB)";Expression={[math]::round($_.Free/1GB,2)}}
 
       - name: Setup Tailscale
         shell: powershell
