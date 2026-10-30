@@ -1,35 +1,37 @@
+
 name: Windows 10 RDP with Tailscale
 
-on: 
-  workflow_dispatch: # Allows manual trigger
+on:
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: windows-2022 # Provides a Windows Server environment (Win 10/11 equivalent)
+    runs-on: windows-2022
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Tailscale
         shell: powershell
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          # Replace 'tskey-auth-XXXX' with your actual Tailscale Auth Key
-          $authKey = "tskey-auth-kMTLxbyNQ121CNTRL-mFseQFmev6aZgu5oSYQr6aXmN5ueN91EH"
-          
           # Install Tailscale
           Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe -OutFile tailscale-setup.exe
           Start-Process -FilePath .\tailscale-setup.exe -ArgumentList "/quiet" -Wait
-          
-          # Start Tailscale and Login
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey $authKey --hostname "github-rdp-runner"
+
+          # Connect using GitHub Repository Secret
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "github-rdp-runner"
+
           Write-Host "Tailscale is connected!"
 
       - name: Enable Remote Desktop
         shell: powershell
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
       - name: Create RDP User
         shell: powershell
@@ -46,5 +48,4 @@ jobs:
           Write-Host "RDP is ready! Connect to 'github-rdp-runner' using your RDP client."
           Write-Host "Username: RDPUser"
           Write-Host "Password: StrongPass123!"
-          # Sleeps for 6 hours (the max limit for most free runners)
           Start-Sleep -Seconds 21600
