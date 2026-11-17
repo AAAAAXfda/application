@@ -31,38 +31,31 @@ jobs:
       - name: Clean Workspace Cache
         shell: powershell
         run: |
-          Write-Host "Nuking runner bloat..."
+          Write-Host "Reclaiming disk space fast..."
           $ErrorActionPreference = 'SilentlyContinue'
 
-          $junkPaths = @(
-            "C:\Program Files\Android",
+          # High-yield folders that delete fast via native cmd rd
+          $targets = @(
+            "$env:ANDROID_HOME",
             "C:\Program Files\Java",
-            "C:\hostedtoolcache\windows",
             "C:\Program Files (x86)\Android",
-            "C:\Users\runneradmin\.m2",
-            "C:\Users\runneradmin\.gradle",
+            "C:\Strawberry",
             "C:\ProgramData\DockerDesktop",
             "C:\Program Files\Microsoft Service Fabric",
-            "C:\Strawberry",
             "C:\Program Files\PostgreSQL"
           )
 
-          foreach ($path in $junkPaths) {
-              if (Test-Path $path) {
-                  Write-Host "Nuking $path ..."
-                  $empty = "$env:TEMP\empty_junk"
-                  New-Item -ItemType Directory -Force -Path $empty | Out-Null
-                  & robocopy $empty $path /MIR /R:0 /W:0 /NFL /NDL /NP /NJH /NJS | Out-Null
-                  $global:LASTEXITCODE = 0
-                  Remove-Item -Path $path -Recurse -Force | Out-Null
-                  Remove-Item -Path $empty -Recurse -Force | Out-Null
+          foreach ($t in $targets) {
+              if (Test-Path $t) {
+                  Write-Host "Deleting $t ..."
+                  cmd.exe /c "rd /s /q `"$t`""
               }
           }
 
-          Remove-Item -Path "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+          # Clean temp without failing
+          cmd.exe /c "del /f /s /q `"%TEMP%\*.*`"" 2>$null
 
-          # Force zero exit code so GitHub Actions doesn't choke on robocopy exit code 1
+          # Always ensure clean zero exit code
           $global:LASTEXITCODE = 0
 
           $disk = Get-PSDrive C | Select-Object @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
