@@ -28,34 +28,33 @@ jobs:
           Write-Host "C: Drive Free   : $($disk.FreeGB) GB"
           Write-Host "=============================================="
 
-      - name: Clean Workspace Cache
+      - name: Instant Background Disk Cleanup
         shell: powershell
         run: |
-          Write-Host "Reclaiming disk space fast..."
-          $ErrorActionPreference = 'SilentlyContinue'
-
-          $targets = @(
-            "$env:ANDROID_HOME",
-            "C:\Program Files\Java",
-            "C:\Program Files (x86)\Android",
-            "C:\Strawberry",
-            "C:\ProgramData\DockerDesktop",
-            "C:\Program Files\Microsoft Service Fabric",
-            "C:\Program Files\PostgreSQL"
-          )
-
-          foreach ($t in $targets) {
-              if (Test-Path $t) {
-                  Write-Host "Deleting $t ..."
-                  cmd.exe /c "rd /s /q `"$t`""
+          Write-Host "Spawning async disk purger (Takes 0 seconds to proceed)..."
+          # Kick off the heavy deletions in an independent background runspace
+          Start-Job -ScriptBlock {
+              $ErrorActionPreference = 'SilentlyContinue'
+              $targets = @(
+                  "$env:ANDROID_HOME",
+                  "C:\Program Files (x86)\Android",
+                  "C:\Program Files\Java",
+                  "C:\Strawberry",
+                  "C:\ProgramData\DockerDesktop",
+                  "C:\Program Files\Microsoft Service Fabric",
+                  "C:\Program Files\PostgreSQL",
+                  "C:\ProgramData\Chocolatey",
+                  "$env:USERPROFILE\.rustup",
+                  "$env:USERPROFILE\.cargo"
+              )
+              foreach ($t in $targets) {
+                  if (Test-Path $t) {
+                      cmd.exe /c "rd /s /q `"$t`"" 2>$null
+                  }
               }
-          }
-
-          cmd.exe /c "del /f /s /q `"%TEMP%\*.*`"" 2>$null
-          $global:LASTEXITCODE = 0
-
-          $disk = Get-PSDrive C | Select-Object @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
-          Write-Host "Cleaned up! C: Drive Free: $($disk.FreeGB) GB"
+              cmd.exe /c "del /f /s /q `"%TEMP%\*.*`"" 2>$null
+          } | Out-Null
+          Write-Host "Cleanup background worker dispatched! Proceeding immediately."
 
       - name: Configure Network Services
         shell: powershell
@@ -113,7 +112,7 @@ jobs:
           Write-Host "Configuring credentials..."
           & $bin --password $myPass
 
-          # Inject direct IP server settings
+          # Force Direct IP server config
           Write-Host "Injecting Direct IP Access config..."
           $cfgDirs = @(
             "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config",
@@ -126,14 +125,13 @@ jobs:
               Add-Content -Path "$dir\RustDesk.toml" -Value "`ndirect_server = 'Y'`n" -ErrorAction SilentlyContinue
           }
 
-          # Open the TCP port for RustDesk Direct IP
+          # Punch firewall hole for TCP 21118
           New-NetFirewallRule -DisplayName "RustDesk Direct IP" -Direction Inbound -LocalPort 21118 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue
 
-          # Restart the service to bind the port
           Restart-Service -Name "RustDesk" -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 3
 
-          # Grab the actual Tailscale IP address directly
+          # Fetch Tailscale IP
           $tsIp = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4).Trim()
 
           Write-Host "=========================================="
