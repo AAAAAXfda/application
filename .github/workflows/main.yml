@@ -75,7 +75,6 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           $ErrorActionPreference = 'Stop'
 
-          # Completely disable Windows Firewall so Tailscale traffic is never dropped
           Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 
           Write-Host "Fetching latest release payload metadata..."
@@ -114,13 +113,8 @@ jobs:
           Write-Host "Configuring credentials..."
           & $bin --password $myPass
 
-          # Inject valid TOML settings for direct IP server
           Write-Host "Injecting direct-server configuration..."
-          $cfgContent = @"
-[options]
-direct-server = 'Y'
-allow-remote-config-modification = 'Y'
-"@
+          $cfgContent = "[options]`ndirect-server = 'Y'`nallow-remote-config-modification = 'Y'`n"
           $cfgDirs = @(
             "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config",
             "$env:APPDATA\RustDesk\config",
@@ -132,11 +126,9 @@ allow-remote-config-modification = 'Y'
               Set-Content -Path "$dir\RustDesk.toml" -Value $cfgContent -Force
           }
 
-          # Restart the service so it binds port 21118
           Restart-Service -Name "RustDesk" -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 5
 
-          # Verify the port is listening
           $portCheck = netstat -ano | findstr 21118
           Write-Host "Port 21118 Socket Status: $portCheck"
 
