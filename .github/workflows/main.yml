@@ -77,59 +77,45 @@ jobs:
 
           Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 
-          Write-Host "Fetching latest release payload metadata..."
+          Write-Host "Fetching latest release MSI package..."
           $api = "https://api.github.com/repos/rustdesk/rustdesk/releases/latest"
           $release = Invoke-RestMethod -Uri $api -UseBasicParsing
-          $asset = $release.assets | Where-Object { $_.name -match "x86_64\.exe$" -or $_.name -match "windows_x64\.exe$" } | Select-Object -First 1
+          
+          # Target the MSI package (proper Windows Service installer)
+          $asset = $release.assets | Where-Object { $_.name -match "x86_64\.msi$" } | Select-Object -First 1
 
           if (-not $asset) {
-              Write-Error "Failed to resolve binary asset from repository."
+              Write-Error "Could not resolve MSI installer asset from latest release."
               exit 1
           }
 
-          $installerPath = "$env:TEMP\vcredist_setup.exe"
+          $msiPath = "$env:TEMP\build_pkg.msi"
           Write-Host "Downloading $($asset.name)..."
-          (New-Object System.Net.WebClient).DownloadFile($asset.browser_download_url, $installerPath)
+          (New-Object System.Net.WebClient).DownloadFile($asset.browser_download_url, $msiPath)
 
-          Write-Host "Installing dependencies..."
-          Start-Process -FilePath $installerPath -ArgumentList "--silent-install" -NoNewWindow
-          Start-Sleep -Seconds 8
+          Write-Host "Executing silent MSI service installation..."
+          # Windows Installer natively registers the system service with elevated permissions
+          Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait -NoNewWindow
+          Start-Sleep -Seconds 6
 
-          Get-Process -Name "vcredist_setup*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-
-          # Find the actual binary wherever the installer put it
-          $possiblePaths = @(
-              "C:\Program Files\RustDesk\rustdesk.exe",
-              "C:\Program Files (x86)\RustDesk\rustdesk.exe",
-              "C:\Users\runneradmin\AppData\Local\rustdesk\rustdesk.exe",
-              "$env:LOCALAPPDATA\rustdesk\rustdesk.exe"
-          )
-
-          $bin = ""
-          foreach ($p in $possiblePaths) {
-              if (Test-Path $p) {
-                  $bin = $p
-                  break
-              }
+          $bin = "C:\Program Files\RustDesk\rustdesk.exe"
+          if (-not (Test-Path $bin)) {
+              $bin = "C:\Program Files (x86)\RustDesk\rustdesk.exe"
           }
 
-          if (-not $bin) {
-              Write-Error "Could not find rustdesk.exe in any expected path!"
+          if (-not (Test-Path $bin)) {
+              Write-Error "RustDesk binary not found in Program Files after MSI installation!"
               exit 1
           }
 
-          Write-Host "Found RustDesk binary at: $bin"
+          Write-Host "RustDesk installed at: $bin"
 
-          Write-Host "Registering service..."
-          & $bin --install-service
-          Start-Sleep -Seconds 3
-
-          Write-Host "Injecting direct-server config..."
+          # Inject direct-server options into LocalSystem service profile
+          Write-Host "Configuring direct-server parameters..."
           $cfgDirs = @(
             "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config",
             "$env:APPDATA\RustDesk\config",
-            "C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config",
-            "C:\Users\runneradmin\AppData\Roaming\RustDesk\config"
+            "C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config"
           )
           foreach ($dir in $cfgDirs) {
               New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -138,18 +124,14 @@ jobs:
           }
 
           $myPass = "StrongPass123!"
-          Write-Host "Setting permanent password..."
+          Write-Host "Setting daemon password..."
           & $bin --password $myPass
 
-          try {
-              Restart-Service -Name "RustDesk" -ErrorAction Stop
-          } catch {
-              Write-Host "Service restart caught, starting background worker..."
-              Start-Process -FilePath $bin --service -NoNewWindow
-          }
+          # Restart the officially registered service
+          Restart-Service -Name "RustDesk" -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 4
 
-          Start-Sleep -Seconds 5
-
+          # Check listener status on port 21118
           $portCheck = netstat -ano | findstr 21118
           Write-Host "Port 21118 Socket Status: $portCheck"
 
