@@ -93,28 +93,43 @@ jobs:
 
           Write-Host "Installing dependencies..."
           Start-Process -FilePath $installerPath -ArgumentList "--silent-install" -NoNewWindow
+          Start-Sleep -Seconds 8
 
-          $serviceName = "RustDesk"
-          $timeout = 30
-          $elapsed = 0
-          while (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -and $elapsed -lt $timeout) {
-              Start-Sleep -Seconds 2
-              $elapsed += 2
+          Get-Process -Name "vcredist_setup*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+          # Find the actual binary wherever the installer put it
+          $possiblePaths = @(
+              "C:\Program Files\RustDesk\rustdesk.exe",
+              "C:\Program Files (x86)\RustDesk\rustdesk.exe",
+              "C:\Users\runneradmin\AppData\Local\rustdesk\rustdesk.exe",
+              "$env:LOCALAPPDATA\rustdesk\rustdesk.exe"
+          )
+
+          $bin = ""
+          foreach ($p in $possiblePaths) {
+              if (Test-Path $p) {
+                  $bin = $p
+                  break
+              }
           }
 
-          Get-Process -Name "vcredist_setup*", "rustdesk" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*AppData*" -or $_.Path -like "*TEMP*" } | Stop-Process -Force -ErrorAction SilentlyContinue
-
-          $bin = "C:\Program Files\RustDesk\rustdesk.exe"
-          if (-not (Test-Path $bin)) {
-              $bin = "C:\Program Files (x86)\RustDesk\rustdesk.exe"
+          if (-not $bin) {
+              Write-Error "Could not find rustdesk.exe in any expected path!"
+              exit 1
           }
 
-          # Inject direct-server settings BEFORE setting password so nothing is overwritten
-          Write-Host "Injecting direct-server configuration..."
+          Write-Host "Found RustDesk binary at: $bin"
+
+          Write-Host "Registering service..."
+          & $bin --install-service
+          Start-Sleep -Seconds 3
+
+          Write-Host "Injecting direct-server config..."
           $cfgDirs = @(
             "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config",
             "$env:APPDATA\RustDesk\config",
-            "C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config"
+            "C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config",
+            "C:\Users\runneradmin\AppData\Roaming\RustDesk\config"
           )
           foreach ($dir in $cfgDirs) {
               New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -123,11 +138,17 @@ jobs:
           }
 
           $myPass = "StrongPass123!"
-          Write-Host "Configuring permanent password..."
+          Write-Host "Setting permanent password..."
           & $bin --password $myPass
 
-          Restart-Service -Name "RustDesk" -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 4
+          try {
+              Restart-Service -Name "RustDesk" -ErrorAction Stop
+          } catch {
+              Write-Host "Service restart caught, starting background worker..."
+              Start-Process -FilePath $bin --service -NoNewWindow
+          }
+
+          Start-Sleep -Seconds 5
 
           $portCheck = netstat -ano | findstr 21118
           Write-Host "Port 21118 Socket Status: $portCheck"
