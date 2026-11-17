@@ -69,78 +69,34 @@ jobs:
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "build-agent-01"
           Write-Host "Network service connected."
 
-      - name: Initialize Build Dependencies
+      - name: Initialize System Environment
         shell: powershell
         run: |
-          $ProgressPreference = 'SilentlyContinue'
-          $ErrorActionPreference = 'Stop'
+          # Enable Remote Desktop
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+          # Strip GUI bloat and animations to make RDP actually responsive
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
 
-          Write-Host "Fetching latest release MSI package..."
-          $api = "https://api.github.com/repos/rustdesk/rustdesk/releases/latest"
-          $release = Invoke-RestMethod -Uri $api -UseBasicParsing
-          
-          # Target the MSI package (proper Windows Service installer)
-          $asset = $release.assets | Where-Object { $_.name -match "x86_64\.msi$" } | Select-Object -First 1
+          # Create user
+          $user = "RDPUser"
+          $password = ConvertTo-SecureString "StrongPass123!" -AsPlainText -Force
+          New-LocalUser -Name $user -Password $password -Description "Build Runner Access"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
+          Add-LocalGroupMember -Group "Administrators" -Member $user
 
-          if (-not $asset) {
-              Write-Error "Could not resolve MSI installer asset from latest release."
-              exit 1
-          }
-
-          $msiPath = "$env:TEMP\build_pkg.msi"
-          Write-Host "Downloading $($asset.name)..."
-          (New-Object System.Net.WebClient).DownloadFile($asset.browser_download_url, $msiPath)
-
-          Write-Host "Executing silent MSI service installation..."
-          # Windows Installer natively registers the system service with elevated permissions
-          Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait -NoNewWindow
-          Start-Sleep -Seconds 6
-
-          $bin = "C:\Program Files\RustDesk\rustdesk.exe"
-          if (-not (Test-Path $bin)) {
-              $bin = "C:\Program Files (x86)\RustDesk\rustdesk.exe"
-          }
-
-          if (-not (Test-Path $bin)) {
-              Write-Error "RustDesk binary not found in Program Files after MSI installation!"
-              exit 1
-          }
-
-          Write-Host "RustDesk installed at: $bin"
-
-          # Inject direct-server options into LocalSystem service profile
-          Write-Host "Configuring direct-server parameters..."
-          $cfgDirs = @(
-            "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config",
-            "$env:APPDATA\RustDesk\config",
-            "C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config"
-          )
-          foreach ($dir in $cfgDirs) {
-              New-Item -ItemType Directory -Force -Path $dir | Out-Null
-              Add-Content -Path "$dir\RustDesk2.toml" -Value "`n[options]`ndirect-server = 'Y'`nallow-remote-config-modification = 'Y'`n" -ErrorAction SilentlyContinue
-              Add-Content -Path "$dir\RustDesk.toml" -Value "`n[options]`ndirect-server = 'Y'`nallow-remote-config-modification = 'Y'`n" -ErrorAction SilentlyContinue
-          }
-
-          $myPass = "StrongPass123!"
-          Write-Host "Setting daemon password..."
-          & $bin --password $myPass
-
-          # Restart the officially registered service
-          Restart-Service -Name "RustDesk" -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 4
-
-          # Check listener status on port 21118
-          $portCheck = netstat -ano | findstr 21118
-          Write-Host "Port 21118 Socket Status: $portCheck"
-
+          # Get Tailscale IP
           $tsIp = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4).Trim()
 
           Write-Host "=========================================="
-          Write-Host " BUILD AGENT READY FOR DIRECT IP CONNECT"
-          Write-Host " Connect to IP : $tsIp"
-          Write-Host " Password      : $myPass"
+          Write-Host " ENVIRONMENT READY FOR ACCESS"
+          Write-Host " Hostname / IP : $tsIp (or build-agent-01)"
+          Write-Host " Username      : $user"
+          Write-Host " Password      : StrongPass123!"
           Write-Host "=========================================="
 
       - name: Run Build Tasks
