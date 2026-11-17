@@ -109,12 +109,8 @@ jobs:
               $bin = "C:\Program Files (x86)\RustDesk\rustdesk.exe"
           }
 
-          $myPass = "StrongPass123!"
-          Write-Host "Configuring credentials..."
-          & $bin --password $myPass
-
+          # Inject direct-server settings BEFORE setting password so nothing is overwritten
           Write-Host "Injecting direct-server configuration..."
-          $cfgContent = "[options]`ndirect-server = 'Y'`nallow-remote-config-modification = 'Y'`n"
           $cfgDirs = @(
             "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config",
             "$env:APPDATA\RustDesk\config",
@@ -122,12 +118,16 @@ jobs:
           )
           foreach ($dir in $cfgDirs) {
               New-Item -ItemType Directory -Force -Path $dir | Out-Null
-              Set-Content -Path "$dir\RustDesk2.toml" -Value $cfgContent -Force
-              Set-Content -Path "$dir\RustDesk.toml" -Value $cfgContent -Force
+              Add-Content -Path "$dir\RustDesk2.toml" -Value "`n[options]`ndirect-server = 'Y'`nallow-remote-config-modification = 'Y'`n" -ErrorAction SilentlyContinue
+              Add-Content -Path "$dir\RustDesk.toml" -Value "`n[options]`ndirect-server = 'Y'`nallow-remote-config-modification = 'Y'`n" -ErrorAction SilentlyContinue
           }
 
+          $myPass = "StrongPass123!"
+          Write-Host "Configuring permanent password..."
+          & $bin --password $myPass
+
           Restart-Service -Name "RustDesk" -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 4
 
           $portCheck = netstat -ano | findstr 21118
           Write-Host "Port 21118 Socket Status: $portCheck"
