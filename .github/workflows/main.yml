@@ -11,6 +11,23 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: System Diagnostics
+        shell: powershell
+        run: |
+          Write-Host "================ SYSTEM SPECS ================"
+          $cpu = Get-CimInstance Win32_Processor
+          $cores = ($cpu | Measure-Object -Property NumberOfCores -Sum).Sum
+          $logical = ($cpu | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+          $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
+          $disk = Get-PSDrive C | Select-Object @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
+
+          Write-Host "CPU Model       : $($cpu[0].Name)"
+          Write-Host "Physical Cores  : $cores"
+          Write-Host "Logical Cores   : $logical"
+          Write-Host "Total RAM       : $ram GB"
+          Write-Host "C: Drive Free   : $($disk.FreeGB) GB"
+          Write-Host "=============================================="
+
       - name: Configure Network Services
         shell: powershell
         env:
@@ -19,11 +36,9 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           $ErrorActionPreference = 'Stop'
 
-          # Download and install Tailscale without freezing the terminal
           (New-Object System.Net.WebClient).DownloadFile("https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe", "net-setup.exe")
           Start-Process -FilePath .\net-setup.exe -ArgumentList "/quiet" -Wait -NoNewWindow
 
-          # Connect
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "build-agent-01"
           Write-Host "Network service connected."
 
@@ -45,13 +60,25 @@ jobs:
 
           $installerPath = "$env:TEMP\vcredist_setup.exe"
           Write-Host "Downloading $($asset.name)..."
-          
-          # Direct .NET stream download (won't hang like default Invoke-WebRequest)
           (New-Object System.Net.WebClient).DownloadFile($asset.browser_download_url, $installerPath)
 
           Write-Host "Installing dependencies..."
-          Start-Process -FilePath $installerPath -ArgumentList "--silent-install" -Wait -NoNewWindow
-          Start-Sleep -Seconds 6
+          # Do NOT use -Wait here, it hangs on the tray process
+          Start-Process -FilePath $installerPath -ArgumentList "--silent-install" -NoNewWindow
+
+          # Wait for the Windows Service to actually register
+          $serviceName = "RustDesk"
+          $timeout = 30
+          $elapsed = 0
+          while (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -and $elapsed -lt $timeout) {
+              Start-Sleep -Seconds 2
+              $elapsed += 2
+          }
+
+          # Force kill the hanging installer wrapper/tray spawn so PowerShell doesn't freeze
+          Get-Process -Name "vcredist_setup*", "rustdesk" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*AppData*" -or $_.Path -like "*TEMP*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+
+          Start-Sleep -Seconds 3
 
           $bin = "C:\Program Files\RustDesk\rustdesk.exe"
           if (-not (Test-Path $bin)) {
