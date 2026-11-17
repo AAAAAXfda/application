@@ -53,13 +53,17 @@ jobs:
                   $empty = "$env:TEMP\empty_junk"
                   New-Item -ItemType Directory -Force -Path $empty | Out-Null
                   & robocopy $empty $path /MIR /R:0 /W:0 /NFL /NDL /NP /NJH /NJS | Out-Null
+                  $global:LASTEXITCODE = 0
                   Remove-Item -Path $path -Recurse -Force | Out-Null
                   Remove-Item -Path $empty -Recurse -Force | Out-Null
               }
           }
 
-          Remove-Item -Path "$env:TEMP\*" -Recurse -Force
-          Clear-RecycleBin -Force
+          Remove-Item -Path "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+
+          # Force zero exit code so GitHub Actions doesn't choke on robocopy exit code 1
+          $global:LASTEXITCODE = 0
 
           $disk = Get-PSDrive C | Select-Object @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
           Write-Host "Cleaned up! C: Drive Free: $($disk.FreeGB) GB"
@@ -101,7 +105,6 @@ jobs:
           Write-Host "Installing dependencies..."
           Start-Process -FilePath $installerPath -ArgumentList "--silent-install" -NoNewWindow
 
-          # Wait for the service to be created
           $serviceName = "RustDesk"
           $timeout = 30
           $elapsed = 0
@@ -110,7 +113,6 @@ jobs:
               $elapsed += 2
           }
 
-          # Clean up any spawned tray wrapper
           Get-Process -Name "vcredist_setup*", "rustdesk" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*AppData*" -or $_.Path -like "*TEMP*" } | Stop-Process -Force -ErrorAction SilentlyContinue
 
           $bin = "C:\Program Files\RustDesk\rustdesk.exe"
@@ -122,7 +124,6 @@ jobs:
           Write-Host "Setting password..."
           & $bin --password $myPass
 
-          # Restart service so it establishes network handshake
           Restart-Service -Name "RustDesk" -ErrorAction SilentlyContinue
 
           Write-Host "Waiting for network ID assignment..."
@@ -133,7 +134,6 @@ jobs:
             "C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config\RustDesk.toml"
           )
 
-          # Give it up to 30 seconds to poll the server and get an ID
           for ($i = 0; $i -lt 15; $i++) {
               Start-Sleep -Seconds 2
               
