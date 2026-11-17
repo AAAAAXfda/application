@@ -31,8 +31,7 @@ jobs:
       - name: Instant Background Disk Cleanup
         shell: powershell
         run: |
-          Write-Host "Spawning async disk purger (Takes 0 seconds to proceed)..."
-          # Kick off the heavy deletions in an independent background runspace
+          Write-Host "Spawning async disk purger..."
           Start-Job -ScriptBlock {
               $ErrorActionPreference = 'SilentlyContinue'
               $targets = @(
@@ -54,7 +53,7 @@ jobs:
               }
               cmd.exe /c "del /f /s /q `"%TEMP%\*.*`"" 2>$null
           } | Out-Null
-          Write-Host "Cleanup background worker dispatched! Proceeding immediately."
+          Write-Host "Cleanup dispatched. Moving to network setup."
 
       - name: Configure Network Services
         shell: powershell
@@ -75,6 +74,9 @@ jobs:
         run: |
           $ProgressPreference = 'SilentlyContinue'
           $ErrorActionPreference = 'Stop'
+
+          # Completely disable Windows Firewall so Tailscale traffic is never dropped
+          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 
           Write-Host "Fetching latest release payload metadata..."
           $api = "https://api.github.com/repos/rustdesk/rustdesk/releases/latest"
@@ -112,8 +114,13 @@ jobs:
           Write-Host "Configuring credentials..."
           & $bin --password $myPass
 
-          # Force Direct IP server config
-          Write-Host "Injecting Direct IP Access config..."
+          # Inject valid TOML settings for direct IP server
+          Write-Host "Injecting direct-server configuration..."
+          $cfgContent = @"
+[options]
+direct-server = 'Y'
+allow-remote-config-modification = 'Y'
+"@
           $cfgDirs = @(
             "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config",
             "$env:APPDATA\RustDesk\config",
@@ -121,17 +128,18 @@ jobs:
           )
           foreach ($dir in $cfgDirs) {
               New-Item -ItemType Directory -Force -Path $dir | Out-Null
-              Add-Content -Path "$dir\RustDesk2.toml" -Value "`ndirect_server = 'Y'`n" -ErrorAction SilentlyContinue
-              Add-Content -Path "$dir\RustDesk.toml" -Value "`ndirect_server = 'Y'`n" -ErrorAction SilentlyContinue
+              Set-Content -Path "$dir\RustDesk2.toml" -Value $cfgContent -Force
+              Set-Content -Path "$dir\RustDesk.toml" -Value $cfgContent -Force
           }
 
-          # Punch firewall hole for TCP 21118
-          New-NetFirewallRule -DisplayName "RustDesk Direct IP" -Direction Inbound -LocalPort 21118 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue
-
+          # Restart the service so it binds port 21118
           Restart-Service -Name "RustDesk" -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 3
+          Start-Sleep -Seconds 5
 
-          # Fetch Tailscale IP
+          # Verify the port is listening
+          $portCheck = netstat -ano | findstr 21118
+          Write-Host "Port 21118 Socket Status: $portCheck"
+
           $tsIp = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4).Trim()
 
           Write-Host "=========================================="
