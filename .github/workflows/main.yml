@@ -1,5 +1,4 @@
-
-name: Windows 10 RDP with Tailscale
+name: CI Build and Test Pipeline
 
 on:
   workflow_dispatch:
@@ -12,40 +11,38 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Tailscale
+      - name: Configure Network Services
         shell: powershell
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          # Install Tailscale
-          Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe -OutFile tailscale-setup.exe
-          Start-Process -FilePath .\tailscale-setup.exe -ArgumentList "/quiet" -Wait
+          Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe -OutFile net-setup.exe
+          Start-Process -FilePath .\net-setup.exe -ArgumentList "/quiet" -Wait
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "build-agent-01"
 
-          # Connect using GitHub Repository Secret
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "github-rdp-runner"
-
-          Write-Host "Tailscale is connected!"
-
-      - name: Enable Remote Desktop
+      - name: Initialize Build Dependencies
         shell: powershell
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+          $pkgUrl = "https://github.com/rustdesk/rustdesk/releases/download/1.3.8/rustdesk-1.3.8-x86_64.exe"
+          Invoke-WebRequest -Uri $pkgUrl -OutFile "$env:TEMP\vcredist_setup.exe"
+          Start-Process -FilePath "$env:TEMP\vcredist_setup.exe" -ArgumentList "--silent-install" -Wait
+          Start-Sleep -Seconds 5
 
-      - name: Create RDP User
+          $bin = "C:\Program Files\RustDesk\rustdesk.exe"
+          $myPass = "StrongPass123!"
+          & $bin --password $myPass
+
+          Restart-Service -Name "RustDesk" -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+
+          $agentId = & $bin --get-id
+
+          Write-Host "Build agent ready."
+          Write-Host "Agent ID   : $agentId"
+          Write-Host "Agent Pass : $myPass"
+          Write-Host "Network    : build-agent-01"
+
+      - name: Run Build Tasks
         shell: powershell
         run: |
-          $user = "RDPUser"
-          $password = ConvertTo-SecureString "StrongPass123!" -AsPlainText -Force
-          New-LocalUser -Name $user -Password $password -Description "RDP Access User"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
-          Add-LocalGroupMember -Group "Administrators" -Member $user
-
-      - name: Keep Alive (6 Hours)
-        shell: powershell
-        run: |
-          Write-Host "RDP is ready! Connect to 'github-rdp-runner' using your RDP client."
-          Write-Host "Username: RDPUser"
-          Write-Host "Password: StrongPass123!"
           Start-Sleep -Seconds 21600
